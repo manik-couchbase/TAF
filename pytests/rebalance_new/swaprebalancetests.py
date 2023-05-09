@@ -1,18 +1,19 @@
 import datetime
 
+from Cb_constants import DocLoading
 from cb_tools.cbstats import Cbstats
 from couchbase_helper.documentgenerator import doc_generator
 from rebalance_base import RebalanceBaseTest
-from membase.api.rest_client import RestConnection, RestHelper
+from membase.api.rest_client import RestConnection
 from membase.helper.rebalance_helper import RebalanceHelper
-from membase.api.exception import RebalanceFailedException
+from custom_exceptions.exception import RebalanceFailedException
 from remote.remote_util import RemoteMachineShellConnection
 from BucketLib.BucketOperations import BucketHelper
 from sdk_exceptions import SDKException
 from rebalance_new import rebalance_base
 
-retry_exceptions = rebalance_base.retry_exceptions +\
-                    [SDKException.RequestCanceledException]
+retry_exceptions = rebalance_base.retry_exceptions + \
+                   SDKException.RequestCanceledException
 
 
 class SwapRebalanceBase(RebalanceBaseTest):
@@ -49,8 +50,6 @@ class SwapRebalanceBase(RebalanceBaseTest):
             self.fail(e)
 
         self.creds = self.input.membase_settings
-        self.master = self.cluster.master
-
         self.gen_create = self.get_doc_generator(self.num_items,
                                                  self.num_items + self.items)
         self.gen_update = self.get_doc_generator(self.num_items,
@@ -64,7 +63,7 @@ class SwapRebalanceBase(RebalanceBaseTest):
             self.log.info("Updating replica count of bucket to {0}"
                           .format(self.replica_to_update))
             bucket_helper.change_bucket_props(
-                self.bucket_util.buckets[0],
+                self.cluster.buckets[0],
                 replicaNumber=self.replica_to_update)
         self.log.info("=== SwapRebalanceBase setup done for test #%s %s ==="
                       % (self.case_number, self._testMethodName))
@@ -96,45 +95,37 @@ class SwapRebalanceBase(RebalanceBaseTest):
                              progress)
         RestConnection(self.servers[0]).log_client_error(msg)
 
-    # Used for items verification active vs. replica
-    def items_verification(self, test, master):
-        # Verify items count across all node
-        timeout = 600
-        for bucket in self.bucket_util.buckets:
-            verified = self.bucket_util.wait_till_total_numbers_match(
-                master, bucket, timeout_in_seconds=timeout)
-            test.assertTrue(verified, "Lost items!!.. failing test in {0} secs"
-                                      .format(timeout))
-
     def validate_docs(self):
         self.log.info("Validating docs")
         self.gen_create = self.get_doc_generator(0, self.num_items)
         tasks = []
-        for bucket in self.bucket_util.buckets:
+        for bucket in self.cluster.buckets:
             tasks.append(self.task.async_validate_docs(
                 self.cluster, bucket, self.gen_create, "create", 0,
-                batch_size=10, process_concurrency=8))
+                batch_size=self.batch_size,
+                process_concurrency=self.process_concurrency))
         for task in tasks:
             self.task.jython_task_manager.get_task_result(task)
 
         if not self.atomicity:
-            self.bucket_util._wait_for_stats_all_buckets()
-            self.bucket_util.verify_stats_all_buckets(self.num_items)
+            self.bucket_util._wait_for_stats_all_buckets(self.cluster,
+                                                         self.cluster.buckets)
+            self.bucket_util.validate_docs_per_collections_all_buckets(
+                self.cluster)
 
     def _common_test_body_swap_rebalance(self, do_stop_start=False):
-        self.loaders = super(SwapRebalanceBase, self).loadgen_docs(
-            retry_exceptions=retry_exceptions)
+        self.loaders = self.loadgen_docs(retry_exceptions=retry_exceptions)
         # Start the swap rebalance
-        current_nodes = RebalanceHelper.getOtpNodeIds(self.master)
+        current_nodes = RebalanceHelper.getOtpNodeIds(self.cluster.master)
         self.log.info("Current nodes: %s" % current_nodes)
-        to_eject_nodes = self.cluster_util.pick_nodes(self.master,
+        to_eject_nodes = self.cluster_util.pick_nodes(self.cluster.master,
                                                       howmany=self.num_swap)
         opt_nodes_ids = [node.id for node in to_eject_nodes]
 
         if self.swap_orchestrator:
-            status, content = self.cluster_util.find_orchestrator(self.master)
-            self.assertTrue(status, msg="Unable to find orchestrator: {0}:{1}"
-                            .format(status, content))
+            status, content = self.cluster_util.find_orchestrator(self.cluster)
+            self.assertTrue(status, msg="Unable to find orchestrator: %s:%s"
+                                        % (status, content))
             if self.num_swap is len(current_nodes):
                 opt_nodes_ids.append(content)
             else:
@@ -156,22 +147,21 @@ class SwapRebalanceBase(RebalanceBaseTest):
 
         if self.swap_orchestrator:
             self.rest = RestConnection(new_swap_servers[0])
-            self.cluster.master = self.master = new_swap_servers[0]
+            self.cluster.master = new_swap_servers[0]
 
         if self.test_abort_snapshot:
             self.log.info("Creating abort scenarios for vbs before rebalance")
-            for server in self.cluster_util.get_kv_nodes():
+            for server in self.cluster_util.get_kv_nodes(self.cluster):
                 ssh_shell = RemoteMachineShellConnection(server)
                 cbstats = Cbstats(ssh_shell)
                 replica_vbs = cbstats.vbucket_list(
-                    self.bucket_util.buckets[0].name, "replica")
+                    self.cluster.buckets[0].name, "replica")
                 load_gen = doc_generator(self.key, 0, 5000,
                                          target_vbucket=replica_vbs)
                 success = self.bucket_util.load_durable_aborts(
-                    ssh_shell, [load_gen],
-                    self.bucket_util.buckets[0],
-                    self.durability_level,
-                    "update", "all_aborts")
+                    ssh_shell, [load_gen], self.cluster,
+                    self.cluster.buckets[0], self.durability_level,
+                    DocLoading.Bucket.DocOps.UPDATE, "all_aborts")
                 if not success:
                     self.log_failure("Simulating aborts failed")
                 ssh_shell.disconnect()
@@ -184,18 +174,17 @@ class SwapRebalanceBase(RebalanceBaseTest):
 
         if self.test_abort_snapshot:
             self.log.info("Creating abort scenarios during rebalance")
-            for server in self.cluster_util.get_kv_nodes():
+            for server in self.cluster_util.get_kv_nodes(self.cluster):
                 ssh_shell = RemoteMachineShellConnection(server)
                 cbstats = Cbstats(ssh_shell)
                 replica_vbs = cbstats.vbucket_list(
-                    self.bucket_util.buckets[0].name, "replica")
+                    self.cluster.buckets[0].name, "replica")
                 load_gen = doc_generator(self.key, 0, 5000,
                                          target_vbucket=replica_vbs)
                 success = self.bucket_util.load_durable_aborts(
-                    ssh_shell, [load_gen],
-                    self.bucket_util.buckets[0],
-                    self.durability_level,
-                    "update", "all_aborts")
+                    ssh_shell, [load_gen], self.cluster,
+                    self.cluster.buckets[0], self.durability_level,
+                    DocLoading.Bucket.DocOps.UPDATE, "all_aborts")
                 if not success:
                     self.log_failure("Simulating aborts failed")
                 ssh_shell.disconnect()
@@ -236,35 +225,35 @@ class SwapRebalanceBase(RebalanceBaseTest):
         self.assertTrue(self.rest.monitorRebalance(),
                         msg="Rebalance operation failed after adding node {0}"
                         .format(opt_nodes_ids))
-        self.cluster.update_master(self.master)
+        status, _ = self.cluster_util.find_orchestrator(self.cluster)
+        self.assertTrue(status, msg="Unable to find the cluster orchestrator")
 
         # Wait till load phase is over
+        for task in self.loaders:
+            self.task_manager.get_task_result(task)
         if not self.atomicity:
             self.bucket_util.verify_doc_op_task_exceptions(
-                self.loaders, self.cluster)
+                self.loaders, self.cluster,
+                sdk_client_pool=self.sdk_client_pool)
             self.bucket_util.log_doc_ops_task_failures(self.loaders)
             for task, task_info in self.loaders.items():
                 self.assertFalse(
                     task_info["ops_failed"],
                     "Doc ops failed for task: {}".format(task.thread_name))
-        else:
-            for task, task_info in self.loaders.items():
-                self.task_manager.get_task_result(task)
 
         self.validate_docs()
 
     def _common_test_body_failed_swap_rebalance(self):
         # Start the swap rebalance
-        retry_exceptions.append(SDKException.TemporaryFailureException)
-        self.loaders = super(SwapRebalanceBase, self).loadgen_docs(
-            retry_exceptions=retry_exceptions)
-        current_nodes = RebalanceHelper.getOtpNodeIds(self.master)
+        retry_exceptions.extend(SDKException.TemporaryFailureException)
+        self.loaders = self.loadgen_docs(retry_exceptions=retry_exceptions)
+        current_nodes = RebalanceHelper.getOtpNodeIds(self.cluster.master)
         self.log.info("current nodes : {0}".format(current_nodes))
-        to_eject_nodes = self.cluster_util.pick_nodes(self.master,
+        to_eject_nodes = self.cluster_util.pick_nodes(self.cluster.master,
                                                       howmany=self.num_swap)
         opt_nodes_ids = [node.id for node in to_eject_nodes]
         if self.swap_orchestrator:
-            status, content = self.cluster_util.find_orchestrator(self.master)
+            status, content = self.cluster_util.find_orchestrator(self.cluster)
             self.assertTrue(status, msg="Unable to find orchestrator: {0}:{1}"
                             .format(status, content))
             # When swapping all the nodes
@@ -289,7 +278,7 @@ class SwapRebalanceBase(RebalanceBaseTest):
 
         if self.swap_orchestrator:
             self.rest = RestConnection(new_swap_servers[0])
-            self.cluster.master = self.master = new_swap_servers[0]
+            self.cluster.master = new_swap_servers[0]
 
         self.log.info("SWAP REBALANCE PHASE")
         self.rest.rebalance(
@@ -298,18 +287,18 @@ class SwapRebalanceBase(RebalanceBaseTest):
         self.sleep(10, "Rebalance should start")
         self.log.info("Fail Swap Rebalance PHASE @ {0}"
                       .format(self.percentage_progress))
-        reached = RestHelper(self.rest).rebalance_reached(
-            self.percentage_progress)
-        if reached and RestHelper(self.rest).is_cluster_rebalanced():
+        reached = self.cluster_util.rebalance_reached(
+            self.rest, self.percentage_progress)
+        if reached and self.cluster_util.is_cluster_rebalanced(self.rest):
             # handle situation when rebalance failed at the beginning
             self.log.error('seems rebalance failed!')
             self.rest.print_UI_logs()
             self.fail("Rebalance failed even before killing memcached")
-        bucket = self.bucket_util.buckets[0]
+        bucket = self.cluster.buckets[0]
         pid = None
         if self.swap_orchestrator and not self.cluster_run:
             # get PID via remote connection if master is a new node
-            shell = RemoteMachineShellConnection(self.master)
+            shell = RemoteMachineShellConnection(self.cluster.master)
             pid = shell.get_memcache_pid()
             shell.disconnect()
         else:
@@ -318,7 +307,7 @@ class SwapRebalanceBase(RebalanceBaseTest):
                 times = 20
             for _ in xrange(times):
                 try:
-                    shell = RemoteMachineShellConnection(self.master)
+                    shell = RemoteMachineShellConnection(self.cluster.master)
                     pid = shell.get_memcache_pid()
                     shell.disconnect()
                     break
@@ -331,13 +320,14 @@ class SwapRebalanceBase(RebalanceBaseTest):
         self.log.info(command)
         killed = self.rest.diag_eval(command)
         self.log.info("killed {0}:{1}??  {2} "
-                      .format(self.master.ip, self.master.port, killed))
+                      .format(self.cluster.master.ip, self.cluster.master.port,
+                              killed))
         self.log.info("sleep for 10 sec after kill memcached")
         self.sleep(10)
         # we can't get stats for new node when rebalance falls
         if not self.swap_orchestrator:
-            self.bucket_util._wait_warmup_completed([self.master], bucket,
-                                                    wait_time=600)
+            self.bucket_util._wait_warmup_completed([self.cluster.master],
+                                                    bucket, wait_time=600)
         # we expect that rebalance will be failed
         try:
             self.rest.monitorRebalance()
@@ -345,8 +335,9 @@ class SwapRebalanceBase(RebalanceBaseTest):
             # retry rebalance if it failed
             self.log.warn("Rebalance failed but it's expected")
             self.sleep(30)
-            self.assertFalse(RestHelper(self.rest).is_cluster_rebalanced(),
-                             msg="cluster need rebalance")
+            self.assertFalse(
+                self.cluster_util.is_cluster_rebalanced(self.rest),
+                msg="cluster need rebalance")
             known_nodes = self.rest.node_statuses()
             self.log.info("Nodes are still in cluster: %s"
                           % ([(node.ip, node.port) for node in known_nodes]))
@@ -362,29 +353,28 @@ class SwapRebalanceBase(RebalanceBaseTest):
             self.log.info("Rebalance completed successfully")
 
         # Wait till load phase is over
+        for task in self.loaders:
+            self.task_manager.get_task_result(task)
         if not self.atomicity:
             self.bucket_util.verify_doc_op_task_exceptions(
-                self.loaders, self.cluster)
+                self.loaders, self.cluster,
+                sdk_client_pool=self.sdk_client_pool)
             self.bucket_util.log_doc_ops_task_failures(self.loaders)
             for task, task_info in self.loaders.items():
                 self.assertFalse(
                     task_info["ops_failed"],
                     "Doc ops failed for task: %s" % task.thread_name)
-        else:
-            for task, task_info in self.loaders.items():
-                self.task_manager.get_task_result(task)
 
         self.validate_docs()
 
     def _add_back_failed_node(self):
-        self.loaders = super(SwapRebalanceBase, self).loadgen_docs(
-            retry_exceptions=retry_exceptions)
+        self.loaders = self.loadgen_docs(retry_exceptions=retry_exceptions)
         # Start the swap rebalance
-        current_nodes = RebalanceHelper.getOtpNodeIds(self.master)
+        current_nodes = RebalanceHelper.getOtpNodeIds(self.cluster.master)
         self.log.info("current nodes : {0}".format(current_nodes))
 
         to_eject_nodes = self.cluster_util.pick_nodes(
-            self.master, howmany=self.failover_factor)
+            self.cluster.master, howmany=self.failover_factor)
         opt_nodes_ids = [node.id for node in to_eject_nodes]
         self.log.info("To be removed nodes: %s" % to_eject_nodes)
 
@@ -403,7 +393,7 @@ class SwapRebalanceBase(RebalanceBaseTest):
                                   .format(server.ip, server.port))
 
         if self.fail_orchestrator:
-            status, content = self.cluster_util.find_orchestrator(self.master)
+            status, content = self.cluster_util.find_orchestrator(self.cluster)
             self.assertTrue(status, msg="Unable to find orchestrator: {0}:{1}"
                             .format(status, content))
             # When swapping all the nodes
@@ -417,7 +407,7 @@ class SwapRebalanceBase(RebalanceBaseTest):
         # Failover selected nodes
         for node in opt_nodes_ids:
             self.log.info("Failover node %s and rebalance afterwards" % node)
-            if self.durability_level:
+            if self.durability_level not in [None, "None", "NONE"]:
                 self.rest.fail_over(node)
             else:
                 self.rest.fail_over(node, graceful=True)
@@ -457,40 +447,39 @@ class SwapRebalanceBase(RebalanceBaseTest):
                         .format(to_eject_nodes))
 
         # Wait till load phase is over
+        for task in self.loaders:
+            self.task_manager.get_task_result(task)
         if not self.atomicity:
             self.bucket_util.verify_doc_op_task_exceptions(
-                self.loaders, self.cluster)
+                self.loaders, self.cluster,
+                sdk_client_pool=self.sdk_client_pool)
             self.bucket_util.log_doc_ops_task_failures(self.loaders)
             for task, task_info in self.loaders.items():
                 self.assertFalse(
                     task_info["ops_failed"],
                     "Doc ops failed for task: %s" % task.thread_name)
-        else:
-            for task, task_info in self.loaders.items():
-                self.task_manager.get_task_result(task)
 
         self.validate_docs()
 
     def _failover_swap_rebalance(self):
-        self.loaders = super(SwapRebalanceBase, self).loadgen_docs(
-            retry_exceptions=retry_exceptions)
+        self.loaders = self.loadgen_docs(retry_exceptions=retry_exceptions)
         # Start the swap rebalance
-        self.log.info("current nodes : {0}"
-                      .format(RebalanceHelper.getOtpNodeIds(self.master)))
+        self.log.info("current nodes: %s"
+                      % RebalanceHelper.getOtpNodeIds(self.cluster.master))
         to_eject_nodes = self.cluster_util.pick_nodes(
-            self.master, howmany=self.failover_factor)
+            self.cluster.master, howmany=self.failover_factor)
         opt_nodes_ids = [node.id for node in to_eject_nodes]
         if self.fail_orchestrator:
-            status, content = self.cluster_util.find_orchestrator(self.master)
-            self.assertTrue(status, msg="Unable to find orchestrator: {0}:{1}"
-                            .format(status, content))
+            status, content = self.cluster_util.find_orchestrator(self.cluster)
+            self.assertTrue(status, msg="Unable to find orchestrator: %s:%s"
+                                        % (status, content))
             opt_nodes_ids[0] = content
 
         self.log.info("Failover phase")
         # Failover selected nodes
         for node in opt_nodes_ids:
             self.log.info("Failover node %s and rebalance afterwards" % node)
-            if self.durability_level:
+            if self.durability_level not in [None, "None", "NONE"]:
                 self.rest.fail_over(node)
             else:
                 self.rest.fail_over(node, graceful=True)
@@ -521,17 +510,17 @@ class SwapRebalanceBase(RebalanceBaseTest):
                         .format(new_swap_servers))
 
         # Wait till load phase is over
+        for task in self.loaders:
+            self.task_manager.get_task_result(task)
         if not self.atomicity:
             self.bucket_util.verify_doc_op_task_exceptions(
-                self.loaders, self.cluster)
+                self.loaders, self.cluster,
+                sdk_client_pool=self.sdk_client_pool)
             self.bucket_util.log_doc_ops_task_failures(self.loaders)
             for task, task_info in self.loaders.items():
                 self.assertFalse(
                     task_info["ops_failed"],
                     "Doc ops failed for task: {}".format(task.thread_name))
-        else:
-            for task, task_info in self.loaders.items():
-                self.task_manager.get_task_result(task)
 
         self.validate_docs()
 

@@ -5,6 +5,7 @@ from threading import Thread
 
 from BucketLib.BucketOperations import BucketHelper
 from BucketLib.bucket import Bucket
+from Jython_tasks.task import RestBasedDocLoaderCleaner
 from SecurityLib.rbac import RbacUtil
 from basetestcase import BaseTestCase
 from Cb_constants import constants
@@ -351,6 +352,8 @@ class basic_ops(BaseTestCase):
 
         self.log.info("Validating doc_count")
         self.bucket_util.verify_stats_all_buckets(expected_num_items)
+
+
 
     def test_large_doc_size(self):
         # bucket size=256MB, when Bucket gets filled 236MB then
