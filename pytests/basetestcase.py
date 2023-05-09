@@ -4,13 +4,15 @@ import traceback
 import unittest
 
 import Cb_constants
+import Jython_tasks.task
 import global_vars
+from Jython_tasks.task import RestBasedDocLoaderCleaner
 from SystemEventLogLib.Events import EventHelper, Event
 from SystemEventLogLib.data_service_events import DataServiceEvents
 from security_config import trust_all_certs
 from collections import OrderedDict
 
-from datetime import datetime
+from datetime import datetime, time
 from ruamel.yaml import YAML
 
 from BucketLib.bucket import Bucket
@@ -121,9 +123,9 @@ class BaseTestCase(unittest.TestCase):
         self.bucket_dedup_retention_bytes = \
             self.input.param("bucket_history_retention_bytes", None)
         self.magma_key_tree_data_block_size = \
-        self.input.param("magma_key_tree_data_block_size", None)
+            self.input.param("magma_key_tree_data_block_size", None)
         self.magma_seq_tree_data_block_size = \
-        self.input.param("magma_seq_tree_data_block_size", None)
+            self.input.param("magma_seq_tree_data_block_size", None)
         # End of bucket parameters
 
         # Doc specific params
@@ -455,6 +457,11 @@ class BaseTestCase(unittest.TestCase):
                 self.system_events.set_test_start_time()
             self.log_setup_status("BaseTestCase", "finished")
             self.__log("started")
+            _clean_sirius_data = RestBasedDocLoaderCleaner(cluster=self.cluster, task_manager=self.task_manager,
+                                                           scope=self.scope_name,
+                                                           collection=self.collection_name)
+            self.task_manager.add_new_task(_clean_sirius_data)
+            self.task_manager.get_task_result(_clean_sirius_data)
         except Exception as e:
             traceback.print_exc()
             self.task.shutdown(force=True)
@@ -607,6 +614,12 @@ class BaseTestCase(unittest.TestCase):
             finally:
                 if reset_cluster_env_vars:
                     self.cluster_util.reset_env_variables(cluster)
+
+        _clean_sirius_data = RestBasedDocLoaderCleaner(cluster=self.cluster, task_manager=self.task_manager,
+                                                       scope=self.scope_name,
+                                                       collection=self.collection_name)
+        self.task_manager.add_new_task(_clean_sirius_data)
+        self.task_manager.get_task_result(_clean_sirius_data)
         self.infra_log.info("========== tasks in thread pool ==========")
         self.task_manager.print_tasks_in_pool()
         self.infra_log.info("==========================================")
@@ -614,9 +627,9 @@ class BaseTestCase(unittest.TestCase):
     def is_test_failed(self):
         return (hasattr(self, '_resultForDoCleanups')
                 and len(self._resultForDoCleanups.failures
-                or self._resultForDoCleanups.errors)) \
-               or (hasattr(self, '_exc_info')
-                   and self._exc_info()[1] is not None)
+                        or self._resultForDoCleanups.errors)) \
+            or (hasattr(self, '_exc_info')
+                and self._exc_info()[1] is not None)
 
     def handle_setup_exception(self, exception_obj):
         # Shutdown client pool in case of any error before failing
@@ -767,7 +780,7 @@ class BaseTestCase(unittest.TestCase):
             core_cmd = "/" + bin_cb + "minidump-2-core " + dmp_file + " > " + core_file
             print("running: %s" % core_cmd)
             gdb_shell.execute_command(core_cmd)
-            gdb = "gdb --batch {} -c {} -ex \"bt full\" -ex quit"\
+            gdb = "gdb --batch {} -c {} -ex \"bt full\" -ex quit" \
                 .format(os.path.join(bin_cb, "memcached"), core_file)
             print("running: %s" % gdb)
             result = gdb_shell.execute_command(gdb)[0]
@@ -838,17 +851,17 @@ class BaseTestCase(unittest.TestCase):
             dmp_files = [f.split()[-1] for f in dmp_files if ".core" not in f]
             dmp_files = [f.strip("\n") for f in dmp_files]
             if dmp_files:
-                print("#"*30)
+                print("#" * 30)
                 print("%s: %d core dump seen" % (server.ip, len(dmp_files)))
                 print("%s: Stack Trace of first crash - %s\n%s"
                       % (server.ip, dmp_files[-1],
                          get_gdb(shell, crash_dir, dmp_files[-1])))
-                print("#"*30)
+                print("#" * 30)
                 result = get_full_thread_dump(shell)
                 print(result)
-#                 print("#"*30)
-#                 run_cbanalyze_core(shell, crash_dir + dmp_files[-1].strip(".dmp") + ".core")
-#                 print("#"*30)
+                #                 print("#"*30)
+                #                 run_cbanalyze_core(shell, crash_dir + dmp_files[-1].strip(".dmp") + ".core")
+                #                 print("#"*30)
                 if self.stop_server_on_crash:
                     shell.stop_couchbase()
                 result = True

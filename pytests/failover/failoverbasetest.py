@@ -6,11 +6,10 @@ from remote.remote_util import RemoteUtilHelper
 from couchbase_helper.documentgenerator import doc_generator
 from sdk_exceptions import SDKException
 
-retry_exceptions = [
-    SDKException.TimeoutException,
-    SDKException.RequestCanceledException,
-    SDKException.DurabilityAmbiguousException,
-    SDKException.DurabilityImpossibleException]
+retry_exceptions = SDKException.TimeoutException + \
+                   SDKException.RequestCanceledException + \
+                   SDKException.DurabilityAmbiguousException + \
+                   SDKException.DurabilityImpossibleException
 
 
 class FailoverBaseTest(BaseTestCase):
@@ -218,10 +217,10 @@ class FailoverBaseTest(BaseTestCase):
                      task_verification=False):
         retry_exceptions = \
             list(set(retry_exceptions +
-                     [SDKException.TimeoutException,
-                      SDKException.RequestCanceledException,
-                      SDKException.DurabilityImpossibleException,
-                      SDKException.DurabilityAmbiguousException]))
+                     SDKException.TimeoutException +
+                     SDKException.RequestCanceledException +
+                     SDKException.DurabilityImpossibleException +
+                     SDKException.DurabilityAmbiguousException))
 
         loaders = self.start_parallel_cruds(retry_exceptions,
                                             ignore_exceptions,

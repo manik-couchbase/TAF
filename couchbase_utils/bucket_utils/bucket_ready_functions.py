@@ -62,9 +62,12 @@ from sdk_exceptions import SDKException
 from table_view import TableView
 from testconstants import MAX_COMPACTION_THRESHOLD, \
     MIN_COMPACTION_THRESHOLD
-from sdk_client3 import SDKClient
+# from sdk_client3 import SDKClient
 from couchbase_helper.tuq_generators import JsonGenerator
 from StatsLib.StatsOperations import StatsHelper
+
+from rest_client import RESTClient
+from sdk_exceptions import check_if_exception_exists
 
 """
 Create a set of bucket_parameters to be sent to all bucket_creation methods
@@ -2862,10 +2865,10 @@ class BucketUtils(ScopeUtils):
                                                                collection)
 
             if client is None:
-                client = SDKClient([cluster.master],
-                                   bucket,
-                                   scope=scope,
-                                   collection=collection)
+                client = RESTClient([cluster.master],
+                                    bucket,
+                                    scope=scope,
+                                    collection=collection)
 
             for key, failed_doc in task.fail.items():
                 found = False
@@ -2883,14 +2886,9 @@ class BucketUtils(ScopeUtils):
                     continue
 
                 ambiguous_state = False
-                if SDKException.DurabilityAmbiguousException \
-                        in str(exception) \
-                        or SDKException.AmbiguousTimeoutException \
-                        in str(exception) \
-                        or SDKException.TimeoutException \
-                        in str(exception) \
-                        or SDKException.RequestCanceledException \
-                        in str(exception):
+                if check_if_exception_exists(str(exception), SDKException.DurabilityAmbiguousException,
+                                             SDKException.AmbiguousTimeoutException, SDKException.TimeoutException,
+                                             SDKException.RequestCanceledException):
                     ambiguous_state = True
 
                 result = client.crud(
@@ -2907,14 +2905,13 @@ class BucketUtils(ScopeUtils):
                     if str(exception).find(ex) != -1:
                         dict_key = "retried"
                         break
+
                 if result["status"] \
                         or (ambiguous_state
-                            and SDKException.DocumentExistsException
-                            in result["error"]
+                            and check_if_exception_exists(result["error"], SDKException.DocumentExistsException)
                             and task_info["op_type"] in ["create", "update"]) \
                         or (ambiguous_state
-                            and SDKException.DocumentNotFoundException
-                            in result["error"]
+                            and check_if_exception_exists(result["error"], SDKException.DocumentNotFoundException)
                             and task_info["op_type"] == "delete"):
                     tasks_info[task][dict_key]["success"].update(key_value)
                 else:
@@ -2922,6 +2919,7 @@ class BucketUtils(ScopeUtils):
             if sdk_client_pool:
                 sdk_client_pool.release_client(client)
             else:
+                pass
                 # Close client for this task
                 client.close()
 

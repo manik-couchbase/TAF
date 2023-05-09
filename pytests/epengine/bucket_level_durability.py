@@ -8,7 +8,7 @@ from couchbase_helper.documentgenerator import doc_generator
 from couchbase_helper.durability_helper import BucketDurability
 from epengine.durability_base import BucketDurabilityBase
 from error_simulation.cb_error import CouchbaseError
-from sdk_client3 import SDKClient
+from rest_client import RESTClient, check_sirius_status
 from sdk_exceptions import SDKException
 
 
@@ -238,7 +238,7 @@ class BucketDurabilityTests(BucketDurabilityBase):
             self.summary.add_step(step_desc)
 
             # SDK client to perform sub_doc ops
-            client = SDKClient([self.cluster.master], bucket_obj)
+            client = RESTClient([self.cluster.master], bucket_obj)
 
             result = client.crud("create", key, value)
             verification_dict["ops_create"] += 1
@@ -741,7 +741,7 @@ class BucketDurabilityTests(BucketDurabilityBase):
                 sdk_client_pool=self.sdk_client_pool)
 
             # SDK client for performing individual ops
-            client = SDKClient([self.cluster.master], bucket)
+            client = RESTClient([self.cluster.master], bucket)
 
             # Perform specified action
             for node in target_nodes:
@@ -784,7 +784,7 @@ class BucketDurabilityTests(BucketDurabilityBase):
                             .KV_SYNC_WRITE_IN_PROGRESS_NO_MORE_RETRIES
 
                     # Validate the returned error from the SDK
-                    if expected_exception not in str(fail["error"]):
+                    if not check_sirius_status(str(fail["error"]), expected_exception):
                         self.log_failure("Invalid exception for {0}: {1}"
                                          .format(key, fail["error"]))
                     if retry_reason not in str(fail["error"]):
@@ -881,7 +881,7 @@ class BucketDurabilityTests(BucketDurabilityBase):
 
         def perform_crud_ops():
             old_cas = 0
-            client = SDKClient([self.cluster.master], bucket_obj)
+            client = RESTClient([self.cluster.master], bucket_obj)
 
             for op_type in ["create", "update", "read", "replace", "delete"]:
                 crud_desc = "Key %s, doc_op: %s" % (key, op_type)

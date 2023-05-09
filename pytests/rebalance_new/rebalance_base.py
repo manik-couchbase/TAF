@@ -18,12 +18,9 @@ from collections_helper.collections_spec_constants import \
 
 from java.lang import Exception as Java_base_exception
 
-retry_exceptions = list([SDKException.AmbiguousTimeoutException,
-                         SDKException.DurabilityImpossibleException,
-                         SDKException.DurabilityAmbiguousException,
-                         SDKException.TimeoutException,
-                         SDKException.ServerOutOfMemoryException,
-                         SDKException.DocumentNotFoundException])
+retry_exceptions = SDKException.AmbiguousTimeoutException + SDKException.DurabilityImpossibleException + \
+                   SDKException.DurabilityAmbiguousException + SDKException.TimeoutException + \
+                   SDKException.ServerOutOfMemoryException + SDKException.DocumentNotFoundException
 
 
 class RebalanceBaseTest(BaseTestCase):
@@ -52,7 +49,7 @@ class RebalanceBaseTest(BaseTestCase):
         info = self.rest.get_nodes_self()
         self.rest.init_cluster(username=self.cluster.master.rest_username,
                                password=self.cluster.master.rest_password)
-        kv_mem_quota = int(info.mcdMemoryReserved*node_ram_ratio)
+        kv_mem_quota = int(info.mcdMemoryReserved * node_ram_ratio)
         self.rest.set_service_mem_quota(
             {CbServer.Settings.KV_MEM_QUOTA: kv_mem_quota})
         self.check_temporary_failure_exception = False
@@ -70,7 +67,7 @@ class RebalanceBaseTest(BaseTestCase):
             result = self.task.rebalance([self.cluster.master], nodes_init, [],
                                          services=services, retry_get_process_num=self.retry_get_process_num)
             self.assertTrue(result, "Initial rebalance failed")
-        self.cluster.nodes_in_cluster.extend([self.cluster.master]+nodes_init)
+        self.cluster.nodes_in_cluster.extend([self.cluster.master] + nodes_init)
         self.check_replica = self.input.param("check_replica", False)
         self.spec_name = self.input.param("bucket_spec", None)
         self.disk_optimized_thread_settings = self.input.param("disk_optimized_thread_settings", False)
@@ -361,14 +358,14 @@ class RebalanceBaseTest(BaseTestCase):
 
     def set_retry_exceptions_for_initial_data_load(self, doc_loading_spec):
         retry_exceptions = list()
-        retry_exceptions.append(SDKException.AmbiguousTimeoutException)
-        retry_exceptions.append(SDKException.TimeoutException)
-        retry_exceptions.append(SDKException.RequestCanceledException)
-        retry_exceptions.append(SDKException.DocumentNotFoundException)
-        retry_exceptions.append(SDKException.ServerOutOfMemoryException)
+        retry_exceptions.extend(SDKException.AmbiguousTimeoutException)
+        retry_exceptions.extend(SDKException.TimeoutException)
+        retry_exceptions.extend(SDKException.RequestCanceledException)
+        retry_exceptions.extend(SDKException.DocumentNotFoundException)
+        retry_exceptions.extend(SDKException.ServerOutOfMemoryException)
         if self.durability_level:
-            retry_exceptions.append(SDKException.DurabilityAmbiguousException)
-            retry_exceptions.append(SDKException.DurabilityImpossibleException)
+            retry_exceptions.extend(SDKException.DurabilityAmbiguousException)
+            retry_exceptions.extend(SDKException.DurabilityImpossibleException)
         doc_loading_spec[MetaCrudParams.RETRY_EXCEPTIONS] = retry_exceptions
 
     def shuffle_nodes_between_zones_and_rebalance(self, to_remove=None):
@@ -457,7 +454,7 @@ class RebalanceBaseTest(BaseTestCase):
                           batch_size=1000,
                           timeout_secs=30, compression=True):
         retry_exceptions_local = retry_exceptions \
-                                 + [SDKException.RequestCanceledException]
+                                 + SDKException.RequestCanceledException
 
         tasks_info = self.bucket_util.sync_load_all_buckets(
             cluster, kv_gen, op_type, exp, flag,
@@ -611,12 +608,13 @@ class RebalanceBaseTest(BaseTestCase):
                      task_verification=False):
         retry_exceptions = \
             list(set(retry_exceptions +
-                     [SDKException.AmbiguousTimeoutException,
-                      SDKException.RequestCanceledException,
-                      SDKException.DurabilityImpossibleException,
-                      SDKException.DurabilityAmbiguousException]))
+                     SDKException.AmbiguousTimeoutException +
+                     SDKException.RequestCanceledException +
+                     SDKException.DurabilityImpossibleException +
+                     SDKException.DurabilityAmbiguousException))
+
         if self.check_temporary_failure_exception:
-            retry_exceptions.append(SDKException.TemporaryFailureException)
+            retry_exceptions.extend(SDKException.TemporaryFailureException)
         if self.atomicity:
             loaders = self.start_parallel_cruds_atomicity(self.sync,
                                                           task_verification)
